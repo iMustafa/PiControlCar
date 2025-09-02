@@ -54,15 +54,15 @@ io.on('connection', (socket: Socket<ClientToServerEvents, ServerToClientEvents>)
     joinedRoom = roomId;
     room.add(socket.id);
     socket.join(roomId);
-    // Assign roles: first joiner is initiator/non-polite, second is non-initiator/polite
-    const isFirst = room.size === 1;
-    const isSecond = room.size === 2;
-    if (isFirst) {
-      socket.emit('room:role', { initiator: true, polite: false });
-    } else if (isSecond) {
-      socket.emit('room:role', { initiator: false, polite: true });
-    }
-    if (room.size === 2) {
+    // Assign roles to all current members: first is initiator/non-polite, second is non-initiator/polite
+    const members = [...room];
+    if (members.length === 1) {
+      io.to(members[0]).emit('room:role', { initiator: true, polite: false });
+    } else if (members.length === 2) {
+      const firstId = members[0];
+      const secondId = members[1];
+      io.to(firstId).emit('room:role', { initiator: true, polite: false });
+      io.to(secondId).emit('room:role', { initiator: false, polite: true });
       // Notify both peers to start negotiation
       io.to(roomId).emit('peer:ready');
     }

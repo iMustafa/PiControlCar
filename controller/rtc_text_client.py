@@ -30,17 +30,7 @@ class TextRtcClient:
         async def on_negotiationneeded() -> None:
             await self._negotiate()
 
-        @self.pc.on("icecandidate")
-        async def on_icecandidate(event) -> None:  # type: ignore[no-redef]
-            candidate = getattr(event, "candidate", None)
-            if candidate is None:
-                return
-            payload = {
-                "candidate": candidate.to_sdp(),
-                "sdpMid": candidate.sdpMid,
-                "sdpMLineIndex": candidate.sdpMLineIndex,
-            }
-            await self.sio.emit("signal:candidate", {"candidate": payload, "roomId": self.room_id})
+        # Note: we rely on non-trickle by sending SDP after ICE gathering completes.
 
         @self.pc.on("iceconnectionstatechange")
         async def on_iceconnectionstatechange() -> None:
@@ -68,7 +58,7 @@ class TextRtcClient:
             self.polite = bool(data.get("polite", False))
             print(f"[sio] role: initiator={self.initiator} polite={self.polite}")
             if self.initiator and self.channel is None:
-                self.channel = self.pc.createDataChannel("chat")
+                self.channel = self.pc.createDataChannel("control")
                 self._bind_channel_handlers()
                 # Proactively negotiate to create the data channel
                 await self._negotiate()
@@ -93,6 +83,7 @@ class TextRtcClient:
             await self.pc.setRemoteDescription(RTCSessionDescription(sdp=sdp["sdp"], type=sdp["type"]))
             answer = await self.pc.createAnswer()
             await self.pc.setLocalDescription(answer)
+            await self._wait_ice_gathering_complete()
             await self.sio.emit("signal:answer", {"sdp": {
                 "type": self.pc.localDescription.type,
                 "sdp": self.pc.localDescription.sdp,
@@ -123,12 +114,17 @@ class TextRtcClient:
 
         @self.channel.on("open")
         def on_open() -> None:  # type: ignore[no-redef]
-            print("[dc] open - sending hello")
-            self.channel.send(f"hello from {self.name}")
+            print("[dc] open")
 
         @self.channel.on("message")
         def on_message(message: Any) -> None:  # type: ignore[no-redef]
-            print(f"[dc] received: {message}")
+            if isinstance(message, (bytes, bytearray, memoryview)):
+                b = bytes(message)
+                print(f"[dc] rx {len(b)} bytes: ", b.hex(" "))
+                # send back acknowledgment: single null byte
+                self.channel.send(b"\x00")
+            else:
+                print(f"[dc] rx text: {message}")
 
     async def _negotiate(self, ice_restart: bool = False) -> None:
         if self.pc.isClosed:  # type: ignore[attr-defined]
@@ -137,6 +133,7 @@ class TextRtcClient:
             self.making_offer = True
             offer = await self.pc.createOffer(iceRestart=ice_restart)  # type: ignore[arg-type]
             await self.pc.setLocalDescription(offer)
+            await self._wait_ice_gathering_complete()
             await self.sio.emit("signal:offer", {"sdp": {
                 "type": self.pc.localDescription.type,
                 "sdp": self.pc.localDescription.sdp,
@@ -144,6 +141,13 @@ class TextRtcClient:
             print("[sio] sent offer")
         finally:
             self.making_offer = False
+
+    async def _wait_ice_gathering_complete(self) -> None:
+        # Wait until ICE gathering completes so SDP includes candidates (non-trickle style)
+        for _ in range(50):
+            if self.pc.iceGatheringState == "complete":
+                return
+            await asyncio.sleep(0.1)
 
     async def run(self) -> None:
         await self.sio.connect(self.base_url, transports=["websocket", "polling"])  # allow fallback
@@ -169,7 +173,7 @@ class TextRtcClient:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="WebRTC text client (data channel only)")
-    parser.add_argument("--base-url", default="http://localhost:5174", help="Signaling server base URL")
+    parser.add_argument("--base-url", default="http://snowball.local:5174", help="Signaling server base URL")
     parser.add_argument("--room-id", required=True, help="Room id to join")
     parser.add_argument("--name", default="python", help="Client name tag")
     return parser.parse_args()
