@@ -6,8 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     "allowedHosts": ["snowball.local"],
-  },
-  build: {
+  },build: {
     outDir: 'dist',
     emptyOutDir: true,
   }
