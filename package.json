@@ -6,10 +6,10 @@
         "node": "20.x"
     },
     "scripts": {
-        "build": "npm run build:client && npm run build:server",
+        "build": "echo Skipping root build; using heroku-postbuild",
         "build:client": "npm run build --prefix client",
         "build:server": "npm run build --prefix server",
         "start": "node server/dist/index.js",
-        "heroku-postbuild": "npm ci --prefix client && npm run build --prefix client && npm ci --prefix server && npm run build --prefix server"
+        "heroku-postbuild": "NPM_CONFIG_PRODUCTION=false npm ci --prefix client && npm run build --prefix client && NPM_CONFIG_PRODUCTION=false npm ci --prefix server && npm run build --prefix server"
     }
 }
