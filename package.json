@@ -2,10 +2,14 @@
     "name": "comms-root",
     "private": true,
     "version": "1.0.0",
+    "engines": {
+        "node": "20.x"
+    },
     "scripts": {
         "build": "npm run build:client && npm run build:server",
         "build:client": "npm run build --prefix client",
         "build:server": "npm run build --prefix server",
-        "start": "npm run build && node server/dist/index.js"
+        "start": "node server/dist/index.js",
+        "heroku-postbuild": "npm ci --prefix client && npm run build --prefix client && npm ci --prefix server && npm run build --prefix server"
     }
 }
