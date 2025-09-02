@@ -5,7 +5,6 @@ from typing import Any, Dict, Optional
 import socketio
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.signaling import BYE
-from ExampleController.vehicle_controller import VehicleController
 
 
 class TextRtcClient:
@@ -121,19 +120,11 @@ class TextRtcClient:
         def on_message(message: Any) -> None:  # type: ignore[no-redef]
             if isinstance(message, (bytes, bytearray, memoryview)):
                 b = bytes(message)
-                # Always log length and a short hex sample
-                sample_hex = b[:64].hex(" ")
-                print(f"[dc] rx bytes={len(b)} sample={sample_hex}", flush=True)
-                if len(b) >= 16:
-                    seq, ts_ms, throttle, steering, buttons, flags = self._parse_frame(b[:16])
-                    th, st = self.vehicle.update(throttle, steering)
-                    print(f"[dc] parsed seq={seq} ts={ts_ms} thr={throttle:.3f}->{th:.3f} ste={steering:.3f}->{st:.3f} btn=0x{buttons:04x} flg=0x{flags:02x}", flush=True)
-                else:
-                    print(f"[dc] short frame (<16B), hex={b.hex(' ')}", flush=True)
+                print(f"[dc] rx {len(b)} bytes: ", b.hex(" "))
                 # send back acknowledgment: single null byte
                 self.channel.send(b"\x00")
             else:
-                print(f"[dc] rx text: {message}", flush=True)
+                print(f"[dc] rx text: {message}")
 
     async def _negotiate(self, ice_restart: bool = False) -> None:
         if self.pc.isClosed:  # type: ignore[attr-defined]
@@ -160,8 +151,6 @@ class TextRtcClient:
 
     async def run(self) -> None:
         await self.sio.connect(self.base_url, transports=["websocket", "polling"])  # allow fallback
-        # Hardware-driving vehicle controller (uses ExampleController GPIO classes)
-        self.vehicle = VehicleController()
         print("[sio] connecting to", self.base_url)
         # Keep running until Ctrl+C
         try:
@@ -181,30 +170,10 @@ class TextRtcClient:
         except Exception:
             pass
 
-    @staticmethod
-    def _parse_frame(b: bytes):
-        """Parse 16-byte big-endian frame.
-        Layout:
-          0: u32 seq
-          4: u32 ts_ms
-          8: i16 throttle (×1000)
-         10: i16 steering (×1000)
-         12: u16 buttons
-         14: u8  flags
-         15: u8  reserved
-        """
-        import struct
-        seq, ts_ms, thr_i16, ste_i16, buttons, flags, _ = struct.unpack(
-            ">IIhhHBB", b
-        )
-        throttle = max(-1.0, min(1.0, thr_i16 / 1000.0))
-        steering = max(-1.0, min(1.0, ste_i16 / 1000.0))
-        return seq, ts_ms, throttle, steering, buttons, flags
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="WebRTC text client (data channel only)")
-    parser.add_argument("--base-url", default="https://picar-e09b89d86d10.herokuapp.com/", help="Signaling server base URL")
+    parser.add_argument("--base-url", default="http://snowball.local:5174", help="Signaling server base URL")
     parser.add_argument("--room-id", required=True, help="Room id to join")
     parser.add_argument("--name", default="python", help="Client name tag")
     return parser.parse_args()
@@ -218,5 +187,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
