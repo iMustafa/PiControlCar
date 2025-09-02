@@ -21,7 +21,7 @@ function App() {
   const [joinedRoomId, setJoinedRoomId] = useState<string | null>(null)
   const [controlRoomId, setControlRoomId] = useState<string | null>(null)
 
-  const baseUrl = useMemo(() => `/`, [])
+  const baseUrl = useMemo(() => `https://picar-e09b89d86d10.herokuapp.com/`, [])
   const { controller, localStream, remoteStream, ready, error } = useWebRtc(baseUrl, joinedRoomId, { enableMedia: true })
   const { controller: controlCtrl } = useWebRtc(baseUrl, controlRoomId, { enableMedia: false, dataChannelLabel: 'control' })
 
