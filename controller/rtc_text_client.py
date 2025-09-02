@@ -1,0 +1,187 @@
+import argparse
+import asyncio
+from typing import Any, Dict, Optional
+
+import socketio
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc.contrib.signaling import BYE
+
+
+class TextRtcClient:
+    def __init__(self, base_url: str, room_id: str, name: str) -> None:
+        self.base_url = base_url.rstrip('/')
+        self.room_id = room_id
+        self.name = name
+
+        self.pc: RTCPeerConnection = RTCPeerConnection()
+        self.channel = None
+
+        # Perfect negotiation flags
+        self.making_offer: bool = False
+        self.ignore_offer: bool = False
+        self.polite: bool = False
+        self.initiator: bool = False
+
+        # Socket.IO async client
+        self.sio = socketio.AsyncClient(reconnection=True)
+
+        # Wire RTCPeerConnection events
+        @self.pc.on("negotiationneeded")
+        async def on_negotiationneeded() -> None:
+            await self._negotiate()
+
+        @self.pc.on("icecandidate")
+        async def on_icecandidate(event) -> None:  # type: ignore[no-redef]
+            candidate = getattr(event, "candidate", None)
+            if candidate is None:
+                return
+            payload = {
+                "candidate": candidate.to_sdp(),
+                "sdpMid": candidate.sdpMid,
+                "sdpMLineIndex": candidate.sdpMLineIndex,
+            }
+            await self.sio.emit("signal:candidate", {"candidate": payload, "roomId": self.room_id})
+
+        @self.pc.on("iceconnectionstatechange")
+        async def on_iceconnectionstatechange() -> None:
+            state = self.pc.iceConnectionState
+            print(f"[rtc] iceConnectionState -> {state}")
+            if state == "failed":
+                # Manual ICE restart for aiortc: create offer with iceRestart=True
+                await self._negotiate(ice_restart=True)
+
+        @self.pc.on("datachannel")
+        def on_datachannel(channel) -> None:  # type: ignore[no-redef]
+            print(f"[rtc] data channel created by remote: {channel.label}")
+            self.channel = channel
+            self._bind_channel_handlers()
+
+        # Wire Socket.IO events
+        @self.sio.event
+        async def connect() -> None:  # type: ignore[no-redef]
+            print("[sio] connected")
+            await self.sio.emit("room:join", self.room_id)
+
+        @self.sio.on("room:role")
+        async def on_role(data: Dict[str, Any]) -> None:  # type: ignore[no-redef]
+            self.initiator = bool(data.get("initiator", False))
+            self.polite = bool(data.get("polite", False))
+            print(f"[sio] role: initiator={self.initiator} polite={self.polite}")
+            if self.initiator and self.channel is None:
+                self.channel = self.pc.createDataChannel("chat")
+                self._bind_channel_handlers()
+                # Proactively negotiate to create the data channel
+                await self._negotiate()
+
+        @self.sio.on("peer:ready")
+        async def on_peer_ready() -> None:  # type: ignore[no-redef]
+            print("[sio] peer ready")
+            if self.initiator:
+                await self._negotiate()
+
+        @self.sio.on("signal:offer")
+        async def on_offer(payload: Dict[str, Any]) -> None:  # type: ignore[no-redef]
+            sdp = payload["sdp"]
+            polite = bool(payload.get("polite", False))
+            self.polite = polite
+            offer_collision = self.making_offer or self.pc.signalingState != "stable"
+            self.ignore_offer = (not self.polite) and offer_collision
+            if self.ignore_offer:
+                print("[sio] ignoring offer (collision and impolite)")
+                return
+            print("[sio] received offer -> setRemoteDescription")
+            await self.pc.setRemoteDescription(RTCSessionDescription(sdp=sdp["sdp"], type=sdp["type"]))
+            answer = await self.pc.createAnswer()
+            await self.pc.setLocalDescription(answer)
+            await self.sio.emit("signal:answer", {"sdp": {
+                "type": self.pc.localDescription.type,
+                "sdp": self.pc.localDescription.sdp,
+            }, "roomId": self.room_id})
+
+        @self.sio.on("signal:answer")
+        async def on_answer(payload: Dict[str, Any]) -> None:  # type: ignore[no-redef]
+            sdp = payload["sdp"]
+            if self.pc.signalingState == "have-local-offer":
+                print("[sio] received answer -> setRemoteDescription")
+                await self.pc.setRemoteDescription(RTCSessionDescription(sdp=sdp["sdp"], type=sdp["type"]))
+
+        @self.sio.on("signal:candidate")
+        async def on_candidate(payload: Dict[str, Any]) -> None:  # type: ignore[no-redef]
+            candidate = payload["candidate"]
+            try:
+                await self.pc.addIceCandidate(candidate)
+            except Exception as e:  # Ignore if rolling back
+                if not self.ignore_offer:
+                    raise e
+
+        @self.sio.on("peer:left")
+        async def on_peer_left() -> None:  # type: ignore[no-redef]
+            print("[sio] peer left")
+
+    def _bind_channel_handlers(self) -> None:
+        assert self.channel is not None
+
+        @self.channel.on("open")
+        def on_open() -> None:  # type: ignore[no-redef]
+            print("[dc] open - sending hello")
+            self.channel.send(f"hello from {self.name}")
+
+        @self.channel.on("message")
+        def on_message(message: Any) -> None:  # type: ignore[no-redef]
+            print(f"[dc] received: {message}")
+
+    async def _negotiate(self, ice_restart: bool = False) -> None:
+        if self.pc.isClosed:  # type: ignore[attr-defined]
+            return
+        try:
+            self.making_offer = True
+            offer = await self.pc.createOffer(iceRestart=ice_restart)  # type: ignore[arg-type]
+            await self.pc.setLocalDescription(offer)
+            await self.sio.emit("signal:offer", {"sdp": {
+                "type": self.pc.localDescription.type,
+                "sdp": self.pc.localDescription.sdp,
+            }, "roomId": self.room_id})
+            print("[sio] sent offer")
+        finally:
+            self.making_offer = False
+
+    async def run(self) -> None:
+        await self.sio.connect(self.base_url, transports=["websocket", "polling"])  # allow fallback
+        print("[sio] connecting to", self.base_url)
+        # Keep running until Ctrl+C
+        try:
+            await self.sio.wait()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            await self.close()
+
+    async def close(self) -> None:
+        try:
+            await self.sio.disconnect()
+        except Exception:
+            pass
+        try:
+            await self.pc.close()
+        except Exception:
+            pass
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="WebRTC text client (data channel only)")
+    parser.add_argument("--base-url", default="http://localhost:5174", help="Signaling server base URL")
+    parser.add_argument("--room-id", required=True, help="Room id to join")
+    parser.add_argument("--name", default="python", help="Client name tag")
+    return parser.parse_args()
+
+
+async def main() -> None:
+    args = parse_args()
+    client = TextRtcClient(base_url=args.base_url, room_id=args.room_id, name=args.name)
+    await client.run()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
