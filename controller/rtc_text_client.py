@@ -121,16 +121,19 @@ class TextRtcClient:
         def on_message(message: Any) -> None:  # type: ignore[no-redef]
             if isinstance(message, (bytes, bytearray, memoryview)):
                 b = bytes(message)
+                # Always log length and a short hex sample
+                sample_hex = b[:64].hex(" ")
+                print(f"[dc] rx bytes={len(b)} sample={sample_hex}", flush=True)
                 if len(b) >= 16:
                     seq, ts_ms, throttle, steering, buttons, flags = self._parse_frame(b[:16])
                     th, st = self.vehicle.update(throttle, steering)
-                    print(f"[dc] seq={seq} ts={ts_ms} thr={throttle:.3f}->{th:.3f} ste={steering:.3f}->{st:.3f} btn=0x{buttons:04x} flg=0x{flags:02x}")
+                    print(f"[dc] parsed seq={seq} ts={ts_ms} thr={throttle:.3f}->{th:.3f} ste={steering:.3f}->{st:.3f} btn=0x{buttons:04x} flg=0x{flags:02x}", flush=True)
                 else:
-                    print(f"[dc] rx {len(b)} bytes: ", b.hex(" "))
+                    print(f"[dc] short frame (<16B), hex={b.hex(' ')}", flush=True)
                 # send back acknowledgment: single null byte
                 self.channel.send(b"\x00")
             else:
-                print(f"[dc] rx text: {message}")
+                print(f"[dc] rx text: {message}", flush=True)
 
     async def _negotiate(self, ice_restart: bool = False) -> None:
         if self.pc.isClosed:  # type: ignore[attr-defined]
