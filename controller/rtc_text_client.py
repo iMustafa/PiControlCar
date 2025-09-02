@@ -173,7 +173,7 @@ class TextRtcClient:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="WebRTC text client (data channel only)")
-    parser.add_argument("--base-url", default="http://snowball.local:5174", help="Signaling server base URL")
+    parser.add_argument("--base-url", default="https://picar-e09b89d86d10.herokuapp.com", help="Signaling server base URL")
     parser.add_argument("--room-id", required=True, help="Room id to join")
     parser.add_argument("--name", default="python", help="Client name tag")
     return parser.parse_args()
