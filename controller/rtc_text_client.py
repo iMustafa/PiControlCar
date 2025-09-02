@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 import socketio
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.signaling import BYE
+from ExampleController.vehicle_controller import VehicleController
 
 
 class TextRtcClient:
@@ -120,7 +121,12 @@ class TextRtcClient:
         def on_message(message: Any) -> None:  # type: ignore[no-redef]
             if isinstance(message, (bytes, bytearray, memoryview)):
                 b = bytes(message)
-                print(f"[dc] rx {len(b)} bytes: ", b.hex(" "))
+                if len(b) >= 16:
+                    seq, ts_ms, throttle, steering, buttons, flags = self._parse_frame(b[:16])
+                    th, st = self.vehicle.update(throttle, steering)
+                    print(f"[dc] seq={seq} ts={ts_ms} thr={throttle:.3f}->{th:.3f} ste={steering:.3f}->{st:.3f} btn=0x{buttons:04x} flg=0x{flags:02x}")
+                else:
+                    print(f"[dc] rx {len(b)} bytes: ", b.hex(" "))
                 # send back acknowledgment: single null byte
                 self.channel.send(b"\x00")
             else:
@@ -151,6 +157,8 @@ class TextRtcClient:
 
     async def run(self) -> None:
         await self.sio.connect(self.base_url, transports=["websocket", "polling"])  # allow fallback
+        # Hardware-driving vehicle controller (uses ExampleController GPIO classes)
+        self.vehicle = VehicleController()
         print("[sio] connecting to", self.base_url)
         # Keep running until Ctrl+C
         try:
@@ -169,6 +177,26 @@ class TextRtcClient:
             await self.pc.close()
         except Exception:
             pass
+
+    @staticmethod
+    def _parse_frame(b: bytes):
+        """Parse 16-byte big-endian frame.
+        Layout:
+          0: u32 seq
+          4: u32 ts_ms
+          8: i16 throttle (×1000)
+         10: i16 steering (×1000)
+         12: u16 buttons
+         14: u8  flags
+         15: u8  reserved
+        """
+        import struct
+        seq, ts_ms, thr_i16, ste_i16, buttons, flags, _ = struct.unpack(
+            ">IIhhHBB", b
+        )
+        throttle = max(-1.0, min(1.0, thr_i16 / 1000.0))
+        steering = max(-1.0, min(1.0, ste_i16 / 1000.0))
+        return seq, ts_ms, throttle, steering, buttons, flags
 
 
 def parse_args() -> argparse.Namespace:
