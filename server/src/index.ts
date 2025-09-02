@@ -24,13 +24,6 @@ interface ClientToServerEvents {
 
 const app = express();
 app.use(cors());
-// Serve built client if present (resolve relative to compiled dist directory)
-import path = require('path');
-const clientDist = path.resolve(__dirname, '../../client/dist');
-app.use(express.static(clientDist));
-app.get(/.*/, (_req, res) => {
-  res.sendFile(path.join(clientDist, 'index.html'));
-});
 
 const server = http.createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
