@@ -1,0 +1,11 @@
+﻿{
+    "name": "comms-root",
+    "private": true,
+    "version": "1.0.0",
+    "scripts": {
+        "build": "npm run build:client && npm run build:server",
+        "build:client": "npm run build --prefix client",
+        "build:server": "npm run build --prefix server",
+        "start": "npm run build && node server/dist/index.js"
+    }
+}

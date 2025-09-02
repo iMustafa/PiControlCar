@@ -1,11 +1,20 @@
-import express from 'express';
-import http from 'http';
-import cors from 'cors';
-import { Server } from 'socket.io';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express = require("express");
+const http = require("http");
+const cors = require("cors");
+const socket_io_1 = require("socket.io");
 const app = express();
 app.use(cors());
+// Serve built client if present (resolve relative to compiled dist directory)
+const path = require("path");
+const clientDist = path.resolve(__dirname, '../../client/dist');
+app.use(express.static(clientDist));
+app.get(/.*/, (_req, res) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
+});
 const server = http.createServer(app);
-const io = new Server(server, {
+const io = new socket_io_1.Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 // In-memory room map: roomId -> Set of socket ids
@@ -29,6 +38,19 @@ io.on('connection', (socket) => {
         joinedRoom = roomId;
         room.add(socket.id);
         socket.join(roomId);
+        // Assign roles to all current members: first is initiator/non-polite, second is non-initiator/polite
+        const members = [...room];
+        if (members.length === 1) {
+            io.to(members[0]).emit('room:role', { initiator: true, polite: false });
+        }
+        else if (members.length === 2) {
+            const firstId = members[0];
+            const secondId = members[1];
+            io.to(firstId).emit('room:role', { initiator: true, polite: false });
+            io.to(secondId).emit('room:role', { initiator: false, polite: true });
+            // Notify both peers to start negotiation
+            io.to(roomId).emit('peer:ready');
+        }
     });
     socket.on('signal:offer', ({ sdp, roomId }) => {
         const room = roomIdToSockets.get(roomId);
